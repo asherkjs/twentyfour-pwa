@@ -1,0 +1,237 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <meta name="apple-mobile-web-app-capable" content="yes">
+  <meta name="apple-mobile-web-app-status-bar-style" content="black">
+  <link rel="apple-touch-icon" href="apple-touch-icon.png">
+  <link rel="manifest" href="manifest.webmanifest" crossorigin="use-credentials">
+  <title>24 Game Solver</title>
+  <style>
+    :root { --bg:#0b0b10; --fg:#e6e6f0; --muted:#a0a3ad; --accent:#6ae3ff; --card:#151822; --good:#62d394; --bad:#ff5a7a; }
+    * { box-sizing: border-box; }
+    body { margin:0; font-family: ui-sans-serif, system-ui, -apple-system, Segoe UI, Roboto, Noto Sans, Helvetica, Arial, 'Apple Color Emoji', 'Segoe UI Emoji'; background:var(--bg); color:var(--fg); }
+    .wrap { max-width: 820px; margin: 40px auto; padding: 24px; }
+    .card { background: var(--card); border: 1px solid #222631; border-radius: 16px; padding: 20px; box-shadow: 0 10px 30px rgba(0,0,0,.35); }
+    h1 { margin: 0 0 8px; font-size: 28px; letter-spacing:.3px; }
+    p.sub { margin: 0 0 16px; color: var(--muted); }
+    .grid { display:flex; flex-wrap:wrap; gap:10px; }
+    .grid input { flex:1 1 calc(25% - 8px); min-width:140px; }
+    input[type='number']{ width:100%; padding:12px 14px; border-radius:12px; border:1px solid #2a2f3c; background:#0f1420; color:var(--fg); font-size:16px; }
+    .actions { display:flex; flex-wrap:wrap; gap:10px; margin-top:12px; }
+    button { padding:12px 14px; border-radius:12px; border:1px solid #2a2f3c; background:#111827; color:var(--fg); font-weight:600; cursor:pointer; transition:transform .02s ease, background .2s ease, border-color .2s ease; }
+    button:hover{ background:#0e1626; }
+    button:active{ transform:translateY(1px); }
+    .accent{ border-color:#224353; background:#12222d; }
+    .bad{ border-color:#522231; background:#2d1219; }
+    .out { margin-top:18px; padding:14px; border-radius:12px; background:#0f1420; border:1px solid #2a2f3c; }
+    .expr { font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, 'Liberation Mono', 'Courier New', monospace; font-size:18px; line-height:1.45; }
+    .status { margin-top:6px; color:var(--muted); font-size:14px; }
+    .chips { display:flex; flex-wrap:wrap; gap:8px; margin-top:8px; }
+    .chip { padding:6px 10px; background:#0f1420; border:1px solid #2a2f3c; border-radius:999px; cursor:pointer; }
+    canvas { display:block; margin-top:14px; border-radius:12px; border:1px solid #2a2f3c; }
+    .warn { display:none; margin-top:12px; padding:10px 12px; border-radius:10px; background:#2d1219; border:1px solid #522231; color:#ffd9e0; }
+  </style>
+</head>
+<body>
+  <div class="wrap">
+    <div class="card">
+      <h1>24 Game Solver</h1>
+      <p class="sub">Enter four numbers (1–10). Uses +, −, ×, ÷ with parentheses. If no solution exists, a solid black canvas is shown.</p>
+      <div class="grid">
+        <input type="number" inputmode="numeric" id="n1" placeholder="#1" />
+        <input type="number" inputmode="numeric" id="n2" placeholder="#2" />
+        <input type="number" inputmode="numeric" id="n3" placeholder="#3" />
+        <input type="number" inputmode="numeric" id="n4" placeholder="#4" />
+      </div>
+      <div class="actions">
+        <button class="accent" id="solveBtn" type="button">Find a solution</button>
+        <button id="allBtn" type="button">List all solutions</button>
+        <button class="bad" id="resetBtn" type="button">Clear</button>
+      </div>
+      <div class="chips" id="examples"></div>
+      <div class="out">
+        <div class="expr" id="result">No result yet.</div>
+        <div class="status" id="status">Initialising…</div>
+        <div class="warn" id="jswarn">If this message stays visible, scripts may be blocked. Open via HTTPS in Safari/Chrome.</div>
+        <canvas id="cnv" width="320" height="200"></canvas>
+      </div>
+    </div>
+  </div>
+
+  <script>
+    // Register service worker
+    if ('serviceWorker' in navigator) {
+      window.addEventListener('load', function(){
+        navigator.serviceWorker.register('./sw.js').catch(function(e){
+          console.log('SW registration failed', e);
+        });
+      });
+    }
+
+    function permutations(arr){
+      if(arr.length === 0) return [[]];
+      var res=[];
+      for(var i=0;i<arr.length;i++){
+        var rest = arr.slice(0,i).concat(arr.slice(i+1));
+        var sub = permutations(rest);
+        for(var p=0;p<sub.length;p++) res.push([arr[i]].concat(sub[p]));
+      }
+      return res;
+    }
+    function approxEqual(a,b,eps){ if(eps===undefined) eps=1e-6; return Math.abs(a-b) <= eps; }
+    function combine(nums, exprs){
+      var N = nums.length;
+      if(N === 1) return [{ val: nums[0], exp: exprs[0] }];
+      var results = [];
+      for(var i=0;i<N;i++){
+        for(var j=0;j<N;j++) if(i!==j){
+          var a = nums[i], b = nums[j];
+          var ea = exprs[i], eb = exprs[j];
+          var restNums = [], restExprs = [];
+          for(var k=0;k<N;k++) if(k!==i && k!==j){ restNums.push(nums[k]); restExprs.push(exprs[k]); }
+          var candidates = [];
+          candidates.push({ val: a + b, exp: '(' + ea + '+' + eb + ')' });
+          candidates.push({ val: a - b, exp: '(' + ea + '-' + eb + ')' });
+          candidates.push({ val: b - a, exp: '(' + eb + '-' + ea + ')' });
+          candidates.push({ val: a * b, exp: '(' + ea + '×' + eb + ')' });
+          if(Math.abs(b) > 1e-12) candidates.push({ val: a / b, exp: '(' + ea + '÷' + eb + ')' });
+          if(Math.abs(a) > 1e-12) candidates.push({ val: b / a, exp: '(' + eb + '÷' + ea + ')' });
+          for(var c=0;c<candidates.length;c++){
+            var cand = candidates[c];
+            var nextNums = restNums.concat([cand.val]);
+            var nextExprs = restExprs.concat([cand.exp]);
+            var rec = combine(nextNums, nextExprs);
+            for(var r=0;r<rec.length;r++) results.push(rec[r]);
+          }
+        }
+      }
+      return results;
+    }
+    function allSolutions(nums){
+      var dict = {};
+      var starts = permutations(nums);
+      for(var s=0;s<starts.length;s++){
+        var p = starts[s];
+        var arr = [Number(p[0]), Number(p[1]), Number(p[2]), Number(p[3])];
+        var exprs = [String(arr[0]), String(arr[1]), String(arr[2]), String(arr[3])];
+        var comb = combine(arr, exprs);
+        for(var j=0;j<comb.length;j++){
+          var r = comb[j];
+          if(approxEqual(r.val, 24)){
+            var exp = r.exp;
+            if(exp.charAt(0)==='(' && exp.charAt(exp.length-1)===')') exp = exp.substring(1, exp.length-1);
+            dict[exp] = true;
+          }
+        }
+      }
+      var out = []; for(var key in dict){ if(dict.hasOwnProperty(key)) out.push(key); }
+      return out;
+    }
+    function firstSolution(nums){
+      var sols = allSolutions(nums);
+      return sols.length ? sols[0] : null;
+    }
+
+    (function initUI(){
+      var ids = ['n1','n2','n3','n4'];
+      var fields = [document.getElementById('n1'), document.getElementById('n2'), document.getElementById('n3'), document.getElementById('n4')];
+      var resultEl = document.getElementById('result');
+      var statusEl = document.getElementById('status');
+      var cnv = document.getElementById('cnv');
+      var ctx = cnv.getContext('2d');
+
+      function readInputs(){
+        var vals = [];
+        for(var i=0;i<fields.length;i++){
+          var v = String(fields[i].value || '').trim();
+          if(v!=='') vals.push(Number(v));
+        }
+        return vals;
+      }
+      function drawBlackCanvas(){ ctx.fillStyle = '#000'; ctx.fillRect(0,0,cnv.width,cnv.height); }
+      function drawSolutionCanvas(expr){
+        ctx.fillStyle = '#0b0b10'; ctx.fillRect(0,0,cnv.width,cnv.height);
+        ctx.fillStyle = '#e6e6f0'; ctx.font = '20px ui-monospace, Menlo, monospace';
+        wrapText(ctx, expr, 16, 40, cnv.width - 32, 26);
+      }
+      function wrapText(ctx, text, x, y, maxWidth, lineHeight){
+        var chars = text.split('');
+        var line = '';
+        for(var i=0;i<chars.length;i++){
+          var testLine = line + chars[i];
+          if(ctx.measureText(testLine).width > maxWidth){ ctx.fillText(line, x, y); line = chars[i]; y += lineHeight; }
+          else { line = testLine; }
+        }
+        ctx.fillText(line, x, y);
+      }
+      function escapeHtml(s){ return s.replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;'); }
+
+      function solve(oneOnly){
+        if(oneOnly===undefined) oneOnly = true;
+        var nums = readInputs();
+        if(nums.length !== 4){
+          resultEl.textContent = 'Enter four numbers.';
+          statusEl.textContent = 'Example: 5, 6, 7, 10';
+          drawBlackCanvas();
+          return;
+        }
+        if(oneOnly){
+          var sol = firstSolution(nums);
+          if(sol){
+            resultEl.textContent = sol + ' = 24';
+            statusEl.textContent = 'Ready';
+            drawSolutionCanvas(sol + ' = 24');
+          } else {
+            resultEl.textContent = 'Impossible with +, −, ×, ÷.';
+            statusEl.textContent = 'Ready';
+            drawBlackCanvas();
+          }
+        } else {
+          var sols = allSolutions(nums);
+          if(sols.length){
+            var shown = sols.slice(0,100);
+            for (var i=0;i<shown.length;i++) shown[i] += ' = 24';
+            resultEl.innerHTML = '<pre class="expr" style="white-space:pre-wrap;">' + escapeHtml(shown.join('\n')) + '</pre>';
+            statusEl.textContent = sols.length + ' solution(s) found (showing ' + Math.min(100, sols.length) + ').';
+            drawSolutionCanvas(shown[0]);
+          } else {
+            resultEl.textContent = 'Impossible with +, −, ×, ÷.';
+            statusEl.textContent = 'Ready';
+            drawBlackCanvas();
+          }
+        }
+      }
+
+      document.getElementById('solveBtn').onclick = function(){ solve(true); };
+      document.getElementById('allBtn').onclick = function(){ solve(false); };
+      document.getElementById('resetBtn').onclick = function(){
+        for(var i=0;i<fields.length;i++) fields[i].value='';
+        resultEl.textContent = 'No result yet.';
+        statusEl.textContent = 'Ready';
+        drawBlackCanvas();
+      };
+
+      var exampleSets = [[5,6,7,10],[1,1,1,1],[2,4,10,10],[6,4,1,10]];
+      var exWrap = document.getElementById('examples');
+      for(var e=0;e<exampleSets.length;e++){
+        (function(set){
+          var b = document.createElement('div');
+          b.className = 'chip';
+          b.textContent = set.join(', ');
+          b.addEventListener('click', function(){
+            for(var i=0;i<fields.length;i++) fields[i].value = set[i];
+            solve(true);
+          });
+          exWrap.appendChild(b);
+        })(exampleSets[e]);
+      }
+
+      drawBlackCanvas();
+      statusEl.textContent = 'Ready';
+      document.getElementById('jswarn').style.display = 'none';
+    })();
+  </script>
+</body>
+</html>
